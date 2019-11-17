@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# Description: Bash script for managing multiple version of terraform
+# Author: Adam Barrett
+# Modified: 2019-11-18
+set -euo pipefail
+
+binDir=$HOME/.local/bin
+hashiUrl="https://releases.hashicorp.com/terraform/"
+INSTALL=false
+VERSION=0
+tfBins=()
+remoteTfVersions=()
+vn=0
+
+# Parse command line options
+while getopts ":iv:" options
+do
+  case "${options}" in
+    i ) INSTALL=true ;;
+    v )	VERSION=${OPTARG:-0} ;;
+  esac
+done
+
+# Check if item is in array
+in_array () {
+  local needle=$1
+  shift
+
+  for i in $@; do
+    if [[ ${i} = ${needle} ]]; then
+      echo 0
+      return
+    fi
+  done
+  echo 1
+  return
+}
+
+# Determine if 64-bit or 32-bit (for download purposes)
+get_kernel_bits () {
+  if [[ "$(uname -m)" = "x86_64" ]]; then 
+    echo "amd64"; 
+  else
+    echo "386"; 
+  fi;
+}
+
+# Determine OS type (osX, Linux, etc) (for download purposes)
+get_os_type () {
+  case "${OSTYPE}" in
+    solaris* ) echo "solaris" ;;
+    darwin* ) echo "darwin" ;;
+    linux* ) echo "linux" ;;
+    bsd* ) echo "freebsd" ;;
+    msys* ) echo "windows" ;;
+    *) echo "unknown: ${OSTYPE}" ;;
+  esac
+}
+
+# get list of local versions
+get_local_versions () {
+  for bin in ${binDir}/terraform_*; do
+
+    if [[ "${bin}" = "${binDir}/terraform_\*" ]]; then
+      continue
+    fi
+
+    if [[ -f $bin && -x $bin ]]; then
+      tfBins=(${tfBins[@]} ${bin##*_});
+    fi
+
+  done
+}
+
+# query list of available versions on hashicorp releases
+get_remote_versions () {
+  # curl for versions 
+  remoteTfVersions=(`curl -s ${hashiUrl} | grep terraform | cut -d'>' -f2 | cut -d'<' -f1 | cut -d'_' -f2`)
+}
+
+# force the symlink
+symlink_version () {
+  ln -sf ${binDir}/terraform_${VERSION} ${binDir}/terraform
+}
+
+select_version() {
+  local pos=1
+  local idx=0
+  local valid=false
+
+  echo "Select version to switch to: "
+  while [[ $valid != "true" ]]; do
+
+    for bin in ${@:$pos:10}; do
+      idx=$((idx+1))
+      echo -e "\t${idx}: ${bin}"
+    done
+
+    if [[ $idx -lt $# ]]; then
+      read -p "Version ([enter] for more results): " vn
+    else
+      read -p "Version: " vn
+    fi
+
+    if [[ $vn -le $# && $vn -gt 0 ]]; then
+      valid=true
+    else
+      pos=$((pos + 10))
+    fi
+  done
+  VERSION=${@:$vn:1}
+}
+
+install_version () {
+  local version=$1
+  os=$(get_os_type)
+  bits=$(get_kernel_bits)
+
+  echo "Installing version: ${version}"
+  checksum=(`curl -s ${hashiUrl}${version}/terraform_${version}_SHA256SUMS | grep ${os}_${bits} | cut -d' ' -f1`)
+  curl -s ${hashiUrl}${version}/terraform_${version}_${os}_${bits}.zip -o /tmp/terraform_${version}.zip
+  muskcehc=$(sha256sum /tmp/terraform_${version}.zip | cut -d' ' -f1)
+  if [[ ${muskcehc} != ${checksum} ]]; then
+    echo "Checksums did not match. Stopping"
+    exit 1
+  fi  
+
+  # unzip the package
+  unzip -qo /tmp/terraform_${version}.zip -d /tmp
+
+  # move the binary into place
+  mv /tmp/terraform ~/.local/bin/terraform_${version}
+
+  # cleanup
+  rm /tmp/terraform*
+}
+
+# Populate the tfbins array
+get_local_versions
+
+if [[ ${INSTALL} = "true" ]]; then
+  if [[ $(in_array $VERSION ${tfBins[@]}) = 0 ]]; then
+    echo "Version ${VERSION} already installed"
+    exit 1
+  fi
+  get_remote_versions
+  select_version ${remoteTfVersions[@]}
+  install_version $VERSION
+  get_local_versions
+fi
+
+# If a version has not been defined, show a selection list
+if [[ "${VERSION}" = "0" ]]; then
+
+  if [[ ${#tfBins[@]} -eq 0 ]]; then
+    # No versions found locally, let user know and bail
+    echo "No local versions found"; 
+    exit 1;
+  fi
+
+  if [[ ${#tfBins[@]} -eq 1 ]]; then
+    # single version found, just slap it in place and bail
+    symlink_version ${tfBins[0]}; 
+    exit 0;
+  fi
+
+  select_version ${tfBins[@]}
+fi
+
+if [[ $(in_array $VERSION ${tfBins[@]}) = 1 ]]; then
+  echo "Version ${VERSION} not available in ${tfBins[@]}"
+  exit 1
+fi
+
+symlink_version ${VERSION}
+terraform --version
