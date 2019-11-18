@@ -2,7 +2,9 @@
 # Description: Bash script for managing multiple version of terraform
 # Author: Adam Barrett
 # Modified: 2019-11-18
-set -euo pipefail
+set -uo pipefail
+
+requirements=("unzip", "curl", "uname", "grep", "cut")
 
 binDir=$HOME/.local/bin
 hashiUrl="https://releases.hashicorp.com/terraform/"
@@ -11,6 +13,14 @@ VERSION=0
 tfBins=()
 remoteTfVersions=()
 vn=0
+
+for reqBin in ${requirements[@]}; do 
+  reqBinPath=$(which ${reqBin} 2>/dev/null)
+  if [[ -z reqBinPath ]]; then
+    echo "${reqBin} not found; please install"
+    exit 1
+  fi
+done
 
 # Parse command line options
 while getopts ":iv:" options
